@@ -140,15 +140,19 @@ jobs:
         run: |
           # A runner has no browser profile. The exporter must explain that and
           # exit non-zero WITHOUT dumping a Python traceback.
-          $ErrorActionPreference = 'Continue'
-          $out = & python scripts/export-cookies.py --browser chrome --out test-cookies.txt 2>&1 | Out-String
+          #
+          # Wrapped in cmd /c so a non-zero Python exit cannot be mistaken for a
+          # PowerShell pipeline error; we only care about the text it printed.
+          $log = Join-Path $env:RUNNER_TEMP 'exporter.log'
+          cmd /c "python scripts/export-cookies.py --browser chrome --out test-cookies.txt > `"$log`" 2>&1"
           $code = $LASTEXITCODE
-          $plain = $out -replace "`e\[[0-9;]*[A-Za-z]", ''
+          $plain = (Get-Content $log -Raw -Encoding UTF8) -replace "`e\[[0-9;]*[A-Za-z]", ''
 
           Write-Host "--- exporter output (exit $code) ---"
           Write-Host $plain
 
           if (Test-Path test-cookies.txt) { Remove-Item test-cookies.txt -Force }
+          Remove-Item $log -Force -ErrorAction SilentlyContinue
 
           if ($plain -match 'Traceback \(most recent call last\)') {
             Write-Host "::error::exporter raised an unhandled exception"
