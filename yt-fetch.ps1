@@ -1,7 +1,7 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Portable YouTube fetcher — works on any Windows machine with Python 3.9+.
+    Portable YouTube fetcher -works on any Windows machine with Python 3.9+.
 
 .DESCRIPTION
     Self-contained version of yt-fetch. No hardcoded paths: Python and Node are
@@ -9,8 +9,8 @@
     into a local venv on first run, so the target machine needs nothing but Python.
 
     Two access modes are supported, chosen automatically:
-      * proxy mode  — if a local HTTP proxy answers on $ProxyPort
-      * direct mode — otherwise connect straight out (works outside mainland China)
+      * proxy mode  -if a local HTTP proxy answers on $ProxyPort
+      * direct mode -otherwise connect straight out (works outside mainland China)
     YouTube blocks anonymous datacenter/proxy exits with "Sign in to confirm you're
     not a bot"; cookies from a logged-in browser profile fix that.
 
@@ -144,13 +144,13 @@ function Ensure-YtDlp {
     $v = Try-YtDlpVersion -Py $Py
     if ($v) { return @{ Version = $v; Python = $Py; Env = @{} } }
 
-    Write-Host "yt-dlp not found — installing into local venv (one time)..." -ForegroundColor Cyan
+    Write-Host "yt-dlp not found -installing into local venv (one time)..." -ForegroundColor Cyan
     if (-not (Test-Path (Join-Path $VenvDir 'Scripts\python.exe'))) {
         & $Py -m venv $VenvDir
         if ($LASTEXITCODE -ne 0) {
             Write-Host "venv failed, trying --user install instead" -ForegroundColor Yellow
             & $Py -m pip install --upgrade --user yt-dlp
-            if ($LASTEXITCODE -ne 0) { throw "failed to install yt-dlp (pip) — no network and no vendored copy?" }
+            if ($LASTEXITCODE -ne 0) { throw "failed to install yt-dlp (pip) -no network and no vendored copy?" }
             return @{ Version = (Try-YtDlpVersion -Py $Py); Python = $Py; Env = @{} }
         }
     }
@@ -229,7 +229,7 @@ if (-not $Url) { throw "-Url is required (or use -Mode cookies)" }
 
 $hasCookies = Test-Path $CookieJar
 if (-not $hasCookies) {
-    Write-Host "No cookie jar yet — YouTube will likely refuse anonymous requests." -ForegroundColor Yellow
+    Write-Host "No cookie jar yet - YouTube will likely refuse anonymous requests." -ForegroundColor Yellow
     Write-Host "Run:  .\yt-fetch.ps1 -Mode cookies" -ForegroundColor Yellow
 }
 
@@ -252,7 +252,7 @@ if ($node) {
     $ytArgs += @('--remote-components', 'ejs:github')
     Write-Verbose "node: $node"
 } else {
-    Write-Host "warning: no Node.js found — some formats may be unavailable." -ForegroundColor Yellow
+    Write-Host "warning: no Node.js found -some formats may be unavailable." -ForegroundColor Yellow
     Write-Host "         install Node.js, or set `$env:YTDLP_NODE" -ForegroundColor Yellow
 }
 
@@ -305,3 +305,4 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "  .\yt-fetch.ps1 -Mode cookies        # refresh cookies, then retry" -ForegroundColor Yellow
     exit $LASTEXITCODE
 }
+

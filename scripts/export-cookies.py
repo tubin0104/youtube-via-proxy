@@ -4,7 +4,7 @@
 Why a bespoke exporter instead of `yt-dlp --cookies-from-browser`:
   * it works while the browser is running (the DB is copied to a temp file first),
   * it gives a clear error when Chrome's app-bound encryption (v20) blocks reading,
-  * it needs no third-party packages — DPAPI comes from ctypes, AES-GCM from Node
+  * it needs no third-party packages -DPAPI comes from ctypes, AES-GCM from Node
     when available, else from a pure-Python fallback.
 
 On Windows, cookie values are encrypted with a key that lives in the browser's
@@ -117,8 +117,7 @@ process.stdin.on('end', () => {
         for (const byte of head) if (byte < 0x20 || byte > 0x7e) { printable = false; break; }
         if (!printable) plain = plain.subarray(32);
       }
-      return plain.toString('utf8');
-    } catch (e) { return null; }
+      return plain.toString('utf8');    } catch (e) { return null; }
   });
   process.stdout.write(JSON.stringify(out));
 });
@@ -148,14 +147,61 @@ def decrypt_values_pure(master_key: bytes, blobs):
             continue
         try:
             plain = AESGCM(master_key).decrypt(blob[3:15], blob[15:-16] + blob[-16:], None)
-            if len(plain) > 32:
-                head = plain[:32]
-                if any(b < 0x20 or b > 0x7e for b in head):
-                    plain = plain[32:]
+            plain = strip_app_bound_header(plain)
             out.append(plain.decode("utf-8", "replace"))
         except Exception:
             out.append(None)
     return out
+
+
+def strip_app_bound_header(plain: bytes) -> bytes:
+    """Chrome >=127 (scheme "v20") prepends a 32-byte binary header to the
+    plaintext. It is not valid cookie text, so drop it when the first bytes are
+    clearly not printable ASCII."""
+    if len(plain) > 32 and any(b < 0x20 or b > 0x7e for b in plain[:32]):
+        return plain[32:]
+    return plain
+
+
+def chrome_time_to_unix(expires: int) -> int:
+    """Convert Chrome's expires_utc to a Unix timestamp.
+
+    Chrome stores microseconds since 1601-01-01; older builds stored seconds.
+    """
+    if not expires:
+        return 0
+    if expires > 1e13:
+        return int(expires / 1e6 - 11644473600)
+    return int(expires - 11644473600)
+
+
+def build_netscape_lines(records, header=True):
+    """Render cookie records as Netscape cookie-jar lines.
+
+    Each record needs: host, path, secure, httponly, expires, name, plain.
+    Records whose value is empty are skipped.
+    """
+    lines = ["# Netscape HTTP Cookie File", "# exported by export-cookies.py", ""] if header else []
+    ok = 0
+    for r in records:
+        value = r.get("plain") or ""
+        if not value:
+            continue
+        host = r["host"]
+        prefix = "#HttpOnly_" if r.get("httponly") else ""
+        lines.append(
+            "\t".join([
+                prefix + host,
+                "TRUE" if host.startswith(".") else "FALSE",
+                r.get("path") or "/",
+                "TRUE" if r.get("secure") else "FALSE",
+                str(chrome_time_to_unix(r.get("expires") or 0)),
+                r["name"],
+                value,
+            ])
+        )
+        ok += 1
+    return lines, ok
 
 
 # --------------------------------------------------------------- firefox path
@@ -222,12 +268,23 @@ def main():
     if not local_state or not os.path.exists(local_state):
         raise SystemExit(f"Local State not found: {local_state}")
 
-    with open(local_state, "r", encoding="utf-8") as f:
-        state = json.load(f)
-    enc_key = base64.b64decode(state["os_crypt"]["encrypted_key"])
+    try:
+        with open(local_state, "r", encoding="utf-8") as f:
+            state = json.load(f)
+        enc_key = base64.b64decode(state["os_crypt"]["encrypted_key"])
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        raise SystemExit(f"cannot read the encryption key from Local State: {e}")
+
     if enc_key[:5] != b"DPAPI":
         raise SystemExit(f"unexpected key prefix {enc_key[:5]!r}")
-    master_key = dpapi_unprotect(enc_key[5:])
+
+    try:
+        master_key = dpapi_unprotect(enc_key[5:])
+    except OSError as e:
+        raise SystemExit(
+            f"DPAPI could not unwrap the cookie key ({e}). This normally means the "
+            "profile was created by a different Windows user account."
+        )
     print(f"master key: {len(master_key)} bytes")
 
     # Read every profile's DB, collecting encrypted blobs.
@@ -274,25 +331,11 @@ def main():
             if not r["plain"] and r["enc"]:
                 r["plain"] = next(it) or ""
 
-    lines = ["# Netscape HTTP Cookie File", "# exported by export-cookies.py", ""]
-    ok = 0
-    v20_fail = 0
-    for r in records:
-        if not r["plain"]:
-            if r["enc"] and r["enc"][:3] == b"v20":
-                v20_fail += 1
-            continue
-        unix = 0
-        if r["expires"]:
-            unix = (int(r["expires"] / 1e6 - 11644473600)
-                    if r["expires"] > 1e13 else int(r["expires"] - 11644473600))
-        prefix = "#HttpOnly_" if r["httponly"] else ""
-        lines.append(
-            "\t".join([prefix + r["host"], "TRUE" if r["host"].startswith(".") else "FALSE",
-                       r["path"], "TRUE" if r["secure"] else "FALSE", str(unix),
-                       r["name"], r["plain"]])
-        )
-        ok += 1
+    lines, ok = build_netscape_lines(records)
+    v20_fail = sum(
+        1 for r in records
+        if not (r.get("plain") or "") and r.get("enc", b"")[:3] == b"v20"
+    )
 
     with open(args.out, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines) + "\n")
@@ -310,4 +353,13 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except Exception as exc:  # noqa: BLE001 - top-level guard, must stay readable
+        # A raw traceback is useless to someone who just wants cookies exported.
+        print(f"export failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        sys.exit(1)

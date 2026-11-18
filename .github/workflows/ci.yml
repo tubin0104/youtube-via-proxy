@@ -1,0 +1,204 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Unit tests: pure logic, no network, no browser, no Windows.
+  # Runs on Linux because the tested code is platform-independent — if it ever
+  # stops being so, this job is what will notice.
+  # ---------------------------------------------------------------------------
+  unit-tests:
+    name: Unit tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Show environment
+        run: |
+          python --version
+          node --version || true
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+
+  # ---------------------------------------------------------------------------
+  # Script checks: PowerShell parsing, portability rules, credential hygiene.
+  # Needs Windows because it parses the real .ps1 files with the PS engine.
+  # ---------------------------------------------------------------------------
+  script-checks:
+    name: PowerShell checks (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out PowerShell version
+        run: $PSVersionTable.PSVersion
+
+      - name: Run static checks
+        shell: pwsh
+        run: ./tests/test-scripts.ps1
+
+      - name: Assert no credentials are tracked
+        shell: pwsh
+        run: |
+          $tracked = git ls-files
+          $bad = $tracked | Where-Object { $_ -match '(^|/)cookies\.txt$|stage1\.json$|\.venv/' }
+          if ($bad) {
+            Write-Error "credential files are tracked: $bad"
+            exit 1
+          }
+          Write-Host "no credential files tracked"
+
+  # ---------------------------------------------------------------------------
+  # End-to-end wiring: prove yt-fetch.ps1 finds Python, installs/uses yt-dlp and
+  # reaches the point where it asks YouTube for data. It is expected to FAIL the
+  # actual download here (GitHub runners have no cookies and their IP is blocked),
+  # so we assert on the shape of the failure rather than on success.
+  # ---------------------------------------------------------------------------
+  wiring:
+    name: Wiring smoke test (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install yt-dlp
+        run: python -m pip install --upgrade yt-dlp
+
+      - name: Script finds Python and yt-dlp
+        shell: pwsh
+        run: |
+          # Deliberately run WITHOUT a cookie jar. On a GitHub runner YouTube will
+          # almost certainly answer with the bot check, but the point of this test
+          # is the wiring: Python found, yt-dlp importable, arguments assembled.
+          # So we assert on the absence of the two failure modes that indicate
+          # broken plumbing, not on the network outcome.
+          $out = & .\yt-fetch.ps1 -Url dQw4w9WgXcQ -Mode info 2>&1 | Out-String
+          Write-Host $out
+
+          $failed = $false
+
+          if ($out -match 'Python 3\.8\+ not found') {
+            Write-Host "::error::script could not locate a Python interpreter"
+            $failed = $true
+          }
+          if ($out -match 'No module named yt_dlp') {
+            Write-Host "::error::script could not use the installed yt-dlp"
+            $failed = $true
+          }
+          if ($out -match 'is not recognized as the name of a cmdlet') {
+            Write-Host "::error::a PowerShell command failed to resolve"
+            $failed = $true
+          }
+
+          if ($failed) { exit 1 }
+
+          # The cookie warning must appear, proving the missing-jar branch ran.
+          if ($out -notmatch 'No cookie jar yet') {
+            Write-Host "::error::expected the no-cookie warning, got none"
+            exit 1
+          }
+
+          Write-Host "wiring OK: python, yt-dlp and argument assembly all work"
+
+      - name: Cookie exporter never crashes with a raw traceback
+        shell: pwsh
+        run: |
+          # Runners may or may not have a browser profile, and never one logged
+          # into YouTube. Either outcome is acceptable; what must NOT happen is an
+          # unhandled traceback — the script has to explain itself and exit cleanly.
+          $out = & python scripts/export-cookies.py --browser chrome --out test-cookies.txt 2>&1 | Out-String
+          Write-Host $out
+          $code = $LASTEXITCODE
+
+          if (Test-Path test-cookies.txt) { Remove-Item test-cookies.txt -Force }
+
+          if ($out -match 'Traceback \(most recent call last\)') {
+            Write-Host "::error::exporter raised an unhandled exception"
+            exit 1
+          }
+
+          # Exit 0 (found cookies) or 1 (none found, explained) are both fine.
+          if ($code -ne 0 -and $code -ne 1) {
+            Write-Host "::error::unexpected exit code $code"
+            exit 1
+          }
+
+          Write-Host "exporter exits cleanly (code $code) without a logged-in browser"
+
+      - name: Hard-subtitle script parses
+        shell: pwsh
+        run: |
+          # Inspect the real parameter list via the AST (Get-Help output is
+          # localized and unreliable across Windows versions).
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path .\extract-hardsubs.ps1), [ref]$null, [ref]$null)
+          $declared = $ast.ParamBlock.Parameters |
+            ForEach-Object { $_.Name.VariablePath.UserPath }
+          Write-Host "declared parameters: $($declared -join ', ')"
+
+          $expected = @('Video', 'Interval', 'Crop', 'Scale', 'Out', 'Ffmpeg')
+          $missing = $expected | Where-Object { $declared -notcontains $_ }
+          if ($missing) {
+            Write-Error "missing parameters: $($missing -join ', ')"
+            exit 1
+          }
+          Write-Host "extract-hardsubs.ps1 exposes all documented parameters"
+
+  # ---------------------------------------------------------------------------
+  # Docs: make sure the README image and the generator stay in sync.
+  # ---------------------------------------------------------------------------
+  docs:
+    name: Docs assets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: README references the demo image
+        run: |
+          grep -q 'docs/demo.png' README.md \
+            || { echo "README does not reference docs/demo.png"; exit 1; }
+          test -f docs/demo.png \
+            || { echo "docs/demo.png is missing"; exit 1; }
+          echo "demo image present and referenced"
+
+      - name: Demo generator is valid Python
+        run: python -m py_compile docs/make-demo.py && echo "make-demo.py compiles"
+
+      - name: Skill file has required frontmatter
+        run: |
+          head -1 SKILL.md | grep -qx -- '---' \
+            || { echo "SKILL.md must start with frontmatter"; exit 1; }
+          grep -q '^name: youtube-via-proxy' SKILL.md \
+            || { echo "SKILL.md is missing the name field"; exit 1; }
+          grep -q '^description: ' SKILL.md \
+            || { echo "SKILL.md is missing the description field"; exit 1; }
+          echo "SKILL.md frontmatter OK"

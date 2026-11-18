@@ -17,8 +17,9 @@ cache/
 *.vtt
 *.json3
 subsamples/
+# 抽帧产物（保留 docs/ 下的文档图片）
 *.jpg
-*.png
+!/docs/*.png
 
 # 编辑器 / 系统
 .vscode/
