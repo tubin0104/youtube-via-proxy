@@ -2,6 +2,7 @@
 
 > 在 Windows 上可靠地读取 YouTube 视频内容 —— 元数据、字幕、音频、视频，以及**从画面里抽取没有独立字幕轨的硬字幕**。
 
+[![CI](https://github.com/tubin0104/youtube-via-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/tubin0104/youtube-via-proxy/actions/workflows/ci.yml)
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue)](https://learn.microsoft.com/powershell/)
 [![Python](https://img.shields.io/badge/Python-3.8%2B-yellow)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
@@ -159,6 +160,27 @@ video → ffmpeg 每 N 秒取一帧 → 裁底部条 → 放大到 1280 宽 → 
 
 - 不含任何个人路径或凭据
 - 新增浏览器支持时同步更新 README 的表格
+- 本地跑一遍测试：
+
+```powershell
+# Python 单元测试（纯逻辑，不需要浏览器和网络）
+python -m unittest discover -s tests -v
+
+# PowerShell 脚本静态检查
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\test-scripts.ps1
+```
+
+CI 会在每次推送时自动运行这两套测试，外加一个在 Windows runner 上验证
+「Python 找到 → yt-dlp 可用 → 参数正确组装」的接线测试。
+
+### 测试覆盖了什么
+
+| 测试 | 覆盖 |
+|---|---|
+| `tests/test_export_cookies.py` | v20 的 32 字节头剥离、Chrome 时间戳换算、Netscape 序列化、浏览器路径解析、Node AES-GCM 往返 |
+| `tests/test-scripts.ps1` | 所有脚本可解析、无硬编码个人路径、参数与模式齐全、EJS 标志存在、凭据未被跟踪 |
+| CI `wiring` 作业 | 脚本能定位 Python、导入 yt-dlp、组装参数并跑到调用阶段 |
+| CI `docs` 作业 | README 引用的截图存在、生成脚本可编译、SKILL.md frontmatter 完整 |
 
 ## 许可证
 
