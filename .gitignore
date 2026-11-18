@@ -1,0 +1,28 @@
+# 凭据与本地状态 —— 绝对不要提交
+cookies.txt
+*cookies*.txt
+stage1.json
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# 运行产物
+out/
+cache/
+*.m4a
+*.mp4
+*.webm
+*.srt
+*.vtt
+*.json3
+subsamples/
+*.jpg
+*.png
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
