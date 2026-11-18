@@ -138,27 +138,28 @@ jobs:
       - name: Cookie exporter never crashes with a raw traceback
         shell: pwsh
         run: |
-          # Runners may or may not have a browser profile, and never one logged
-          # into YouTube. Either outcome is acceptable; what must NOT happen is an
-          # unhandled traceback — the script has to explain itself and exit cleanly.
+          # A runner has no browser profile. The exporter must explain that and
+          # exit non-zero WITHOUT dumping a Python traceback.
+          $ErrorActionPreference = 'Continue'
           $out = & python scripts/export-cookies.py --browser chrome --out test-cookies.txt 2>&1 | Out-String
-          Write-Host $out
           $code = $LASTEXITCODE
+          $plain = $out -replace "`e\[[0-9;]*[A-Za-z]", ''
+
+          Write-Host "--- exporter output (exit $code) ---"
+          Write-Host $plain
 
           if (Test-Path test-cookies.txt) { Remove-Item test-cookies.txt -Force }
 
-          if ($out -match 'Traceback \(most recent call last\)') {
+          if ($plain -match 'Traceback \(most recent call last\)') {
             Write-Host "::error::exporter raised an unhandled exception"
             exit 1
           }
-
-          # Exit 0 (found cookies) or 1 (none found, explained) are both fine.
-          if ($code -ne 0 -and $code -ne 1) {
-            Write-Host "::error::unexpected exit code $code"
+          if ($plain -notmatch 'no cookie database|Local State not found|cannot read') {
+            Write-Host "::error::exporter did not explain why it could not proceed"
             exit 1
           }
 
-          Write-Host "exporter exits cleanly (code $code) without a logged-in browser"
+          Write-Host "exporter fails cleanly with an explanation (exit $code)"
 
       - name: Hard-subtitle script parses
         shell: pwsh
