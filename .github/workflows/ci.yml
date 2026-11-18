@@ -135,6 +135,10 @@ jobs:
 
           Write-Host "wiring OK: python, yt-dlp and argument assembly all work"
 
+          # A non-zero yt-dlp exit (bot check, no cookies) is expected here and
+          # must not be inherited as this step's own result.
+          exit 0
+
       - name: Cookie exporter never crashes with a raw traceback
         shell: pwsh
         run: |
@@ -164,6 +168,10 @@ jobs:
           }
 
           Write-Host "exporter fails cleanly with an explanation (exit $code)"
+
+          # The native exit code must not leak into this step's result: we already
+          # asserted on the text, which is the actual subject of the test.
+          exit 0
 
       - name: Hard-subtitle script parses
         shell: pwsh
