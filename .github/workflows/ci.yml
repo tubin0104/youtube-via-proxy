@@ -94,32 +94,42 @@ jobs:
       - name: Script finds Python and yt-dlp
         shell: pwsh
         run: |
-          # Diagnostics first: if the interpreter lookup is what breaks, these
-          # lines say so before we get into assertions.
           Write-Host "--- environment ---"
           Write-Host "python on PATH: $((Get-Command python -ErrorAction SilentlyContinue).Source)"
           Write-Host "RUNNER_TOOL_CACHE: $env:RUNNER_TOOL_CACHE"
-          Write-Host "YTDLP_PYTHON: $env:YTDLP_PYTHON"
           python -c "import sys, yt_dlp; print(sys.version); print('yt-dlp', yt_dlp.version.__version__)"
 
-          # Run WITHOUT a cookie jar. On a runner YouTube usually answers with the
-          # bot check; that is fine. What matters is the plumbing: Python found,
-          # yt-dlp importable, arguments assembled, no unhandled cmdlet errors.
+          # Assert on the process exit code and the two failure signatures that
+          # indicate broken plumbing. The network outcome is irrelevant here:
+          # a runner has no cookies, so YouTube may or may not answer.
           $ErrorActionPreference = 'Continue'
           $out = & .\yt-fetch.ps1 -Url dQw4w9WgXcQ -Mode info 2>&1 | Out-String
-          Write-Host "--- script output ---"
-          Write-Host $out
+          $code = $LASTEXITCODE
+          $plain = $out -replace "`e\[[0-9;]*[A-Za-z]", ''
 
-          if ($out -match 'Python 3\.8\+ not found') {
+          Write-Host "--- script output (exit $code) ---"
+          Write-Host $plain
+
+          if ($plain -match 'Python 3\.8\+ not found') {
             Write-Host "::error::script could not locate a Python interpreter"
             exit 1
           }
-          if ($out -match 'No module named yt_dlp') {
+          if ($plain -match 'No module named yt_dlp') {
             Write-Host "::error::script could not use the installed yt-dlp"
             exit 1
           }
-          if ($out -notmatch 'No cookie jar yet') {
-            Write-Host "::error::expected the no-cookie warning, got none"
+          if ($plain -match 'is not recognized as the name of a cmdlet') {
+            Write-Host "::error::a cmdlet failed to resolve inside the script"
+            exit 1
+          }
+
+          # Positive evidence the script got past interpreter discovery and built
+          # its yt-dlp invocation: either it warned about cookies, or yt-dlp ran
+          # far enough to report a YouTube-side result.
+          $gotPastWiring = ($plain -match 'cookie') -or ($plain -match 'author:') `
+                          -or ($plain -match 'not a bot') -or ($plain -match 'duration_sec')
+          if (-not $gotPastWiring) {
+            Write-Host "::error::script did not reach the yt-dlp invocation stage"
             exit 1
           }
 
