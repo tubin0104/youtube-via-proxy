@@ -75,6 +75,23 @@ function Find-Python {
         (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\python.exe'),
         (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python311\python.exe')
     )
+    # GitHub-hosted runners (setup-python) and similar tool caches.
+    foreach ($root in @($env:RUNNER_TOOL_CACHE, 'C:\hostedtoolcache\windows')) {
+        if (-not $root -or -not (Test-Path $root)) { continue }
+        $pythonRoot = Join-Path $root 'Python'
+        if (-not (Test-Path $pythonRoot)) { continue }
+        $found = Get-ChildItem $pythonRoot -Directory -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending |
+            ForEach-Object { Join-Path $_.FullName 'x64\python.exe' } |
+            Where-Object { Test-Path $_ }
+        if ($found) { $candidates += @($found) }
+    }
+    # Any python.exe already on PATH via its directory listing (last resort).
+    foreach ($p in ($env:PATH -split ';')) {
+        if (-not $p) { continue }
+        $exe = Join-Path $p 'python.exe'
+        if (Test-Path $exe) { $candidates += $exe }
+    }
 
     foreach ($c in $candidates) {
         if (-not $c -or -not (Test-Path $c)) { continue }

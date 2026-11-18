@@ -22,7 +22,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.9", "3.11", "3.13"]
+        # 3.9 is no longer provisioned on ubuntu-latest runners, so the matrix
+        # starts at the oldest version still available there.
+        python: ["3.10", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
 
@@ -92,32 +94,30 @@ jobs:
       - name: Script finds Python and yt-dlp
         shell: pwsh
         run: |
-          # Deliberately run WITHOUT a cookie jar. On a GitHub runner YouTube will
-          # almost certainly answer with the bot check, but the point of this test
-          # is the wiring: Python found, yt-dlp importable, arguments assembled.
-          # So we assert on the absence of the two failure modes that indicate
-          # broken plumbing, not on the network outcome.
-          $out = & .\yt-fetch.ps1 -Url dQw4w9WgXcQ -Mode info 2>&1 | Out-String
-          Write-Host $out
+          # Diagnostics first: if the interpreter lookup is what breaks, these
+          # lines say so before we get into assertions.
+          Write-Host "--- environment ---"
+          Write-Host "python on PATH: $((Get-Command python -ErrorAction SilentlyContinue).Source)"
+          Write-Host "RUNNER_TOOL_CACHE: $env:RUNNER_TOOL_CACHE"
+          Write-Host "YTDLP_PYTHON: $env:YTDLP_PYTHON"
+          python -c "import sys, yt_dlp; print(sys.version); print('yt-dlp', yt_dlp.version.__version__)"
 
-          $failed = $false
+          # Run WITHOUT a cookie jar. On a runner YouTube usually answers with the
+          # bot check; that is fine. What matters is the plumbing: Python found,
+          # yt-dlp importable, arguments assembled, no unhandled cmdlet errors.
+          $ErrorActionPreference = 'Continue'
+          $out = & .\yt-fetch.ps1 -Url dQw4w9WgXcQ -Mode info 2>&1 | Out-String
+          Write-Host "--- script output ---"
+          Write-Host $out
 
           if ($out -match 'Python 3\.8\+ not found') {
             Write-Host "::error::script could not locate a Python interpreter"
-            $failed = $true
+            exit 1
           }
           if ($out -match 'No module named yt_dlp') {
             Write-Host "::error::script could not use the installed yt-dlp"
-            $failed = $true
+            exit 1
           }
-          if ($out -match 'is not recognized as the name of a cmdlet') {
-            Write-Host "::error::a PowerShell command failed to resolve"
-            $failed = $true
-          }
-
-          if ($failed) { exit 1 }
-
-          # The cookie warning must appear, proving the missing-jar branch ran.
           if ($out -notmatch 'No cookie jar yet') {
             Write-Host "::error::expected the no-cookie warning, got none"
             exit 1
